@@ -70,21 +70,12 @@ class BranchInteraction
     @branches = @git.branches.local.dup
   end
 
-  def display_branches
-    puts "Merged branches:"
-    @branches.select(&:merged?).each do |branch|
-      next if branch.to_s == 'master'
-      prefix = branch.selected? ? "*" : " "
-      puts "  %s %s" % [prefix, branch]
-    end
-    puts
-  end
-
   def merged_branches
     @branches.reject{ |b| b.to_s == 'master' || !b.merged? }
   end
 
   def ask_select
+    puts "Merged branches:"
     menu = merged_branches.map {|b| b.to_s + (b.selected? ? ' (*)' : '') } << 'delete selected' << 'abort'
     HighLine.new.choose(*menu.flatten) {|m|
       m.prompt = "Something: "
@@ -108,6 +99,10 @@ class BranchInteraction
       @git.lib.branch_delete(b)
     }
   end
+
+  def current_is_master
+    @git.current_branch.to_s == 'master'
+  end
 end
 
 Main {
@@ -118,18 +113,23 @@ Main {
   }
 
   def run
-
     runner = BranchInteraction.new
+
+    unless runner.current_is_master
+      puts 'Please check out master branch in order to proceed'
+      puts
+      return 3
+    end
     if runner.merged_branches.empty?
       puts 'No merged branches found, exiting'
-      exit 2
+      puts
+      return 2
     end
     if params['delete-merged'].given?
       runner.delete_merged
-      exit 0
+      return 0
     end
     loop do
-      runner.display_branches
       choice = runner.ask_select
       break if 'abort' == choice
       if choice == 'delete selected'

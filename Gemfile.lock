@@ -5,6 +5,7 @@ GEM
     chronic (0.9.1)
     fattr (2.2.1)
     git (1.2.5)
+    highline (1.6.19)
     main (5.2.0)
       arrayfields (>= 4.7.4)
       chronic (>= 0.6.2)
@@ -17,4 +18,5 @@ PLATFORMS
 
 DEPENDENCIES
   git
+  highline
   main

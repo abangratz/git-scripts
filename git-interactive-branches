@@ -1,0 +1,144 @@
+#!/usr/bin/env ruby
+require 'main'
+require 'git'
+require 'highline'
+
+module Git
+  class Lib
+    def branches_merged
+      command_lines('branch', %w[--merged]).map do |b|
+        b.gsub('* ', '').strip
+      end
+    end
+
+    def branch_delete(branch, force=false)
+      delete_opt = force ? '-D' : '-d'
+      command('branch', [delete_opt, branch])
+    end
+  end
+  class Branch
+    attr_accessor :merged, :selected
+
+    def initialize(base, name, merged=false)
+      @full = name
+      @base = base
+      @gcommit = nil
+      @stashes = nil
+      @remote, @name = parse_name(name)
+      @merged = merged
+      @selected = false
+    end
+
+    def merged?
+      @merged
+    end
+
+    def selected?
+      @selected
+    end
+
+    def parse_name(name)
+      if name.match(/^(?:remotes)?\/([^\/]+)\/(.+)/)
+        return [Git::Remote.new(@base, $1), $2]
+      end
+
+      return [nil, name]
+    end
+  end
+  class Branches
+    def initialize(base)
+      @branches = {}
+      @base = base
+      merged = @base.lib.branches_merged
+      @base.lib.branches_all.each do |b|
+        @branches[b[0]] = Git::Branch.new(@base, b[0], merged.include?(b[0]))
+      end
+    end
+  end
+end
+
+class BranchInteraction
+
+  attr_reader :branches
+
+  def initialize
+    @selected = []
+    @working_dir = Dir.pwd
+    logger = Logger.new(STDOUT)
+    logger.level = Logger::ERROR
+    @git = Git.open(@working_dir, log: logger)
+    @branches = @git.branches.local.dup
+  end
+
+  def display_branches
+    puts "Merged branches:"
+    @branches.select(&:merged?).each do |branch|
+      next if branch.to_s == 'master'
+      prefix = branch.selected? ? "*" : " "
+      puts "  %s %s" % [prefix, branch]
+    end
+    puts
+  end
+
+  def merged_branches
+    @branches.reject{ |b| b.to_s == 'master' || !b.merged? }
+  end
+
+  def ask_select
+    menu = merged_branches.map {|b| b.to_s + (b.selected? ? ' (*)' : '') } << 'delete selected' << 'abort'
+    HighLine.new.choose(*menu.flatten) {|m|
+      m.prompt = "Something: "
+    }
+  end
+
+  def select_branch(name)
+    name.gsub!(/ \(\*\)\Z/, '')
+    branch = @branches.detect {|b| b.to_s == name }
+    branch.selected = ! branch.selected
+  end
+
+  def delete_selected
+    @branches.select(&:selected?).map {|b|
+      @git.lib.branch_delete(b)
+    }
+  end
+
+  def delete_merged
+    merged_branches.map { |b|
+      @git.lib.branch_delete(b)
+    }
+  end
+end
+
+Main {
+  option('delete-merged') {
+    cast :boolean
+    argument :optional
+    description 'deletes all merged branches without interaction'
+  }
+
+  def run
+
+    runner = BranchInteraction.new
+    if runner.merged_branches.empty?
+      puts 'No merged branches found, exiting'
+      exit 2
+    end
+    if params['delete-merged'].given?
+      runner.delete_merged
+      exit 0
+    end
+    loop do
+      runner.display_branches
+      choice = runner.ask_select
+      break if 'abort' == choice
+      if choice == 'delete selected'
+        runner.delete_selected
+        break
+      end
+      runner.select_branch(choice)
+    end
+  end
+}
+
+

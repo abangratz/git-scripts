@@ -1,10 +1,53 @@
 #!/usr/bin/env ruby
-require 'main'
-require 'git'
-require 'highline'
+require 'ostruct'
+require 'optparse'
 
-module Git
+module MyGit
+  def self.open(working_dir)
+    Base.new(working_dir)
+  end
+  class Base
+    attr_accessor :git_dir, :lib
+
+    def initialize(working_dir)
+      @git_dir = working_dir
+      @lib = Lib.new(self)
+    end
+
+    def current_branch
+      @lib.branch_current
+    end
+
+    def branches
+      Branches.new(self)
+    end
+  end
   class Lib
+    def initialize(base)
+      @base = base
+    end
+
+    def command(cmd, opts=[], &block)
+      opts = [opts].flatten.join(' ')
+      git_cmd = "git #{cmd} #{opts}"
+      if block_given?
+        IO.popen(git_cmd, &block)
+      else
+        `#{git_cmd}`.chomp
+      end
+    end
+
+    def command_lines(cmd, opts=[])
+      command(cmd, opts).split("\n")
+    end
+
+    def branches_all
+      command_lines('branch' ).map do |b|
+        current = b =~ /\A\* /
+        [b.gsub('* ', '').strip, current]
+      end
+    end
+
     def branches_merged
       command_lines('branch', %w[--merged]).map do |b|
         b.gsub('* ', '').strip
@@ -15,18 +58,23 @@ module Git
       delete_opt = force ? '-D' : '-d'
       command('branch', [delete_opt, branch])
     end
+
+    def branch_current
+      branches_all.detect {|b| b[1]}
+    end
   end
   class Branch
-    attr_accessor :merged, :selected
+    attr_accessor :merged, :selected, :current
 
-    def initialize(base, name, merged=false)
+    def initialize(base, name, current=false, merged=false)
       @full = name
       @base = base
+      @name = name
       @gcommit = nil
       @stashes = nil
-      @remote, @name = parse_name(name)
       @merged = merged
       @selected = false
+      @current = current
     end
 
     def merged?
@@ -37,21 +85,32 @@ module Git
       @selected
     end
 
-    def parse_name(name)
-      if name.match(/^(?:remotes)?\/([^\/]+)\/(.+)/)
-        return [Git::Remote.new(@base, $1), $2]
-      end
-
-      return [nil, name]
+    def current?
+      @current
     end
+
+    def to_s
+      @name
+    end
+
   end
   class Branches
+    include Enumerable
+
+    def each(&block)
+      @branches.values.each(&block)
+    end
+
+    def [](name)
+      @branches[name]
+    end
+
     def initialize(base)
       @branches = {}
       @base = base
       merged = @base.lib.branches_merged
       @base.lib.branches_all.each do |b|
-        @branches[b[0]] = Git::Branch.new(@base, b[0], merged.include?(b[0]))
+        @branches[b[0]] = MyGit::Branch.new(@base, b[0], b[1], merged.include?(b[0]))
       end
     end
   end
@@ -59,27 +118,17 @@ end
 
 class BranchInteraction
 
-  attr_reader :branches
+  attr_reader :branches, :git
 
   def initialize
     @selected = []
     @working_dir = Dir.pwd
-    logger = Logger.new(STDOUT)
-    logger.level = Logger::ERROR
-    @git = Git.open(@working_dir, log: logger)
-    @branches = @git.branches.local.dup
+    @git = MyGit.open(@working_dir)
+    load_branches
   end
 
   def merged_branches
     @branches.reject{ |b| b.to_s == 'master' || !b.merged? }
-  end
-
-  def ask_select
-    puts "Merged branches:"
-    menu = merged_branches.map {|b| b.to_s + (b.selected? ? ' (*)' : '') } << 'delete selected' << 'abort'
-    HighLine.new.choose(*menu.flatten) {|m|
-      m.prompt = "Something: "
-    }
   end
 
   def select_branch(name)
@@ -94,51 +143,93 @@ class BranchInteraction
     }
   end
 
+  def delete_branch_by_index(idx)
+    branchname = merged_branches[idx].to_s
+    branch = @branches[branchname]
+    @git.lib.branch_delete(branch)
+    load_branches
+  end
+
   def delete_merged
     merged_branches.map { |b|
       @git.lib.branch_delete(b)
     }
+    load_branches
+  end
+
+  def current_branch
+    @branches.detect { |b| b.current? }
   end
 
   def current_is_master
-    @git.current_branch.to_s == 'master'
+    self.current_branch.to_s == 'master'
+  end
+
+  def load_branches
+    @branches = @git.branches.dup
   end
 end
 
-Main {
-  option('delete-merged') {
-    cast :boolean
-    argument :optional
-    description 'deletes all merged branches without interaction'
-  }
 
-  def run
-    runner = BranchInteraction.new
+if $0 == __FILE__
+  options = OpenStruct.new(interactive: true)
+  OptionParser.new do |opts|
+    opts.banner = 'USAGE: git interactive-branches [--delete-merged]'
+    opts.separator ''
+    opts.separator "Options:"
+    opts.separator ''
+    opts.on('-d', '--delete-merged', 'Delete merged local branches without interaction') {
+      options.interactive = false
+    }
+    opts.on_tail('-h', '--help', 'This.') {
+      puts opts
+      exit
+    }
+  end.parse!
 
-    unless runner.current_is_master
-      puts 'Please check out master branch in order to proceed'
-      puts
-      return 3
-    end
-    if runner.merged_branches.empty?
-      puts 'No merged branches found, exiting'
-      puts
-      return 2
-    end
-    if params['delete-merged'].given?
-      runner.delete_merged
-      return 0
-    end
+  runner = BranchInteraction.new
+  unless runner.current_is_master
+    puts "ERROR: Current checked out branch is '#{runner.current_branch}'\n\n"
+    puts 'Please check out master branch in order to proceed.'
+    puts
+    exit 3
+  end
+  if runner.merged_branches.empty?
+    puts "ERROR: No merged branches found, exiting\n\n"
+    exit 2
+  end
+  if options.interactive
     loop do
-      choice = runner.ask_select
-      break if 'abort' == choice
-      if choice == 'delete selected'
-        runner.delete_selected
+      puts ' Merged branches: '
+      puts
+      runner.merged_branches.each_with_index do |b, i|
+        puts "#{i}.  #{b}"
+      end
+      puts
+      puts "   [A]ll"
+      puts "   [Q]uit"
+      puts
+      print "Delete which branch? "
+      x = gets
+      break if x =~ /q/i
+      if x =~/\Aa(ll)?/i
+        runner.delete_merged
+      else
+        if runner.merged_branches[x.to_i]
+          runner.delete_branch_by_index(x.to_i)
+        else
+          puts "Please select an existing branch number or Q to quit."
+          puts
+        end
+      end
+      if runner.merged_branches.empty?
+        puts "All merged branches deleted. Exiting."
         break
       end
-      runner.select_branch(choice)
     end
+  else
+    runner.delete_merged
   end
-}
+end
 
 

@@ -6,6 +6,7 @@ A collection (\*cough\*) of git scripts I use in daily practice.
 
 Used for deleting merged branches.
 
+~~
 ### Installation
 
 You can use the Gemfile (via bundler) to install the gems needed. Manually, you want to install
@@ -15,7 +16,7 @@ You can use the Gemfile (via bundler) to install the gems needed. Manually, you 
 - [ruby-git](https://github.com/schacon/ruby-git)
 
 via rubygems in every environment (gemset?) that you want to use it (or use the global gemset, if you know what you are
-doing).
+		doing).
 
 Example:
 
@@ -26,6 +27,7 @@ gem install git
 ```
 
 
+~~
 ### Usage
 
 Default is an interactive mode that shows you a menu where you can select a branch or

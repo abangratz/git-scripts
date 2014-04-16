@@ -1,0 +1,26 @@
+#!/usr/bin/env ruby
+
+
+versions=`git for-each-ref refs/tags --sort=-taggerdate --format='%(refname)'`.gsub(%r{^refs/tags/}, '').split(/\n/).sort_by { |x| maj, min, patch = x.gsub(/^v/, '').split('.'); [-maj.to_i, -min.to_i, -patch.to_i]}
+
+first_version = `git log --pretty="format:%H" --reverse | head -1`.chomp
+
+versions = versions.push(first_version)
+
+File.open('CHANGELOG', 'w') do |f|
+	versions.each_cons(2) do |from_version, to_version|
+		range = "#{to_version}..#{from_version}"
+		tag_info = `git show #{to_version} |head -3`
+		date_info = ""
+		tag_info.match(/Date:\s+(.+)/n) do |m|
+			date_info = m[1]
+		end
+		git_info = `git log --pretty="format:	* %s" #{range}`
+		title = "#{from_version} / #{date_info}"
+		f.puts title
+		f.puts "=" * title.size
+		f.puts 
+		f.puts git_info
+		f.puts "\n"
+	end
+end
